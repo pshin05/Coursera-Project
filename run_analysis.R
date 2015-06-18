@@ -1,6 +1,6 @@
-library(plyr)
-library(reshape2)
-library(foreign)
+library(dplyr)
+library(lubridate)
+library(tidyr)
 
 setwd('~/WORK/Coursera/Coursera_Getting and Cleaning Data/Codes')
 
@@ -33,13 +33,13 @@ dim(X.train); dim(y.train)
 
 # Read Features File
 proj.features <- paste(proj.dataDir, "features.txt", sep="/")
-Features <- read.csv(proj.features, header=F, sep="", col.names=c("ID", "Desc"))  
-
+Features <- read.csv(proj.features, header=F, sep="", col.names=c("id", "desc"))  
+?read.csv
 # Read Subject Files
 proj.subj.test <- paste(proj.dataDir, "test", "subject_test.txt", sep="/")
 proj.subj.train <- paste(proj.dataDir, "train", "subject_train.txt", sep="/")
-Subj.test <- read.csv(proj.subj.test, header=F, sep="")
-Subj.train <- read.csv(proj.subj.train, header=F, sep="")
+Subj.test <- read.csv(proj.subj.test, header=F, sep="", colClasses=c("integer"))
+Subj.train <- read.csv(proj.subj.train, header=F, sep="", colClasses=c("integer"))
 
 # Sanity Checks
 stopifnot(ncol(X.test) == nrow(Features))
@@ -49,53 +49,69 @@ stopifnot(nrow(X.test) == nrow(Subj.test))
 stopifnot(nrow(X.train) == nrow(y.train))
 stopifnot(nrow(X.train) == nrow(Subj.train))
 
+# Convert all data to dplyr format
+X.test <- dplyr::tbl_df(X.test)
+X.train <- dplyr::tbl_df(X.train)
+y.test <- dplyr::tbl_df(y.test)
+y.train <- dplyr::tbl_df(y.train)
+Features <- dplyr::tbl_df(Features)
+Subj.test <- dplyr::tbl_df(Subj.test)
+Subj.train <- dplyr::tbl_df(Subj.train)
+
 # Merge the training and the test sets to create one data set.
-X <- rbind(X.test, X.train)
-y <- rbind(y.test, y.train)
-Subj <- rbind(Subj.test, Subj.train)
+X <- dplyr::bind_rows(X.test, X.train)
+y <- dplyr::bind_rows(y.test, y.train)
+Subj <- dplyr::bind_rows(Subj.test, Subj.train)
 stopifnot(nrow(X) == nrow(y))
 stopifnot(nrow(X) == nrow(Subj))
 
 # Appropriately labels the data set with descriptive variable names. 
-colnames(X) <- Features$Desc
-colnames(y) <- c("ActivityCode")
+colnames(X) <- Features$desc
+colnames(y) <- c("activityCode")
+colnames(Subj) <- "subject"
 
 # Find All Features with "mean" or "std" in its description
-Features <- transform(Features, MeanOrStd=regexpr('mean|std', Desc, ignore.case=T) > 0)
-table(Features$MeanOrStd)
+Features <- Features %>% 
+  mutate(meanOrStd=grepl('mean|std', Features$desc, ignore.case=T))
+
+# Make a quick visual check
+table(Features$meanOrStd)
+head(Features, n=10)
 
 # Extract only the measurements on the mean and standard deviation for each measurement. 
-X.MeanOrStd <- X[, Features$MeanOrStd]
-dim(X.MeanOrStd)
+X.select <- X[, Features$meanOrStd]
+dim(X.select)
 
 # Add Subject Variable to X
-X.MeanOrStd$Subject <- Subj[, 1]
+X.select <- bind_cols(X.select, Subj)
 
 # Read Activity Labels File
 proj.activity <- paste(proj.dataDir, "activity_labels.txt", sep="/")
-Activity <- read.csv(proj.activity, header=F, sep="", col.names=c("Code", "Label"))
+Activity <- read.csv(proj.activity, header=F, sep="", col.names=c("code", "label"))
 dim(Activity)
 
 # To reduce future confusion, relevel factors to match the code
-unclass(Activity$Label)
-Activity$Label <- factor(Activity$Label, levels=Activity$Label)
-unclass(Activity$Label)
+unclass(Activity$label)
+Activity$label <- factor(Activity$label, levels=Activity$label)
+unclass(Activity$label)
 
-# Uses descriptive activity names to name the activities in the data set
+# Use descriptive activity names to name the activities in the data set
 head(y)
-X.MeanOrStd$Activity <- Activity$Label[y$ActivityCode]
-table(X.MeanOrStd$Activity, y$ActivityCode)
+X.select$activity <- Activity$label[y$activityCode]
+
+# Make a quick visual check (Result should be diagonal)
+table(X.select$activity, y$activityCode)
 
 # Creates a second, independent tidy data set with the average of each variable 
 # for each activity and each subject.
-X.Melted <- melt(X.MeanOrStd, id.vars = c("Subject", "Activity"))
-head(X.Melted, n=4)
-X2 <- tapply(X.Melted$value, 
-             X.Melted[, c("Subject", "Activity", "variable")], mean)
-X2 <- melt(X2, id.vars = c("Subject", "Activity"))
-colnames(X2)[3:4] <- c("Variable", "Average")
-head(X2)
+X.tidy <- X.select %>% 
+  tidyr::gather(feature, value, -c(subject, activity)) %>%
+  dplyr::group_by(subject, activity, feature) %>%
+  dplyr::summarize(mean(value)) %>%
+  dplyr::arrange(activity, subject)
 
-# Final Tity Data
-?write.table
-write.table(X2, "averages.txt", row.names=F)
+# Quick Visual Check
+X.tidy
+
+# Write Tidy Data
+write.table(X.tidy, "averages.txt", row.names=F)
